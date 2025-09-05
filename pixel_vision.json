@@ -1,0 +1,14 @@
+{
+    "env": [
+      {
+        "PV":
+        [
+            {
+                "houdini_version == '21.0'": "/media/frank-martinelli/SSD-001/A1.MK.PxVision/pixel_vision_master"
+            }
+        ]
+                
+      }
+    ],
+    "hpath": "$PV"  
+}
