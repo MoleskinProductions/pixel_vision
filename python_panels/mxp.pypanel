@@ -1,0 +1,250 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<pythonPanelDocument>
+  <!-- This file contains definitions of Python interfaces and the
+ interfaces menu.  It should not be hand-edited when it is being
+ used by the application.  Note, that two definitions of the
+ same interface or of the interfaces menu are not allowed
+ in a single file. -->
+  <interface name="mxp" label="MXP" icon="hicon:/SVGIcons.index?MTLX_hmtlxpbrtextureset.svg" showNetworkNavigationBar="false" help_url="">
+    <script><![CDATA[########################################################################
+# Replace the sample code below with your own to create a
+# PySide interface.  Your code must define an
+# onCreateInterface() function that returns the root widget of
+# your interface.
+#
+# The 'hutil.PySide' is for internal-use only.
+#
+# When developing your own Python Panel, import directly from PySide
+# instead of from 'hutil.PySide'.
+########################################################################
+
+#
+# SAMPLE CODE
+#
+# from hutil.PySide import QtWidgets
+import os
+import json 
+import networkx
+from hutil.PySide import QtWidgets, QtGui, QtCore
+import hou
+import json
+import networkx as nx
+import pickle
+
+
+############################
+# Graph Search Utility Functions
+############################
+def search_assets_by_tag(G: nx.Graph, tag: str):
+    tag_node = f"tag:{tag.lower()}"
+    if tag_node not in G:
+        return set()
+    return {n for n in G.neighbors(tag_node) if G.nodes[n].get("node_type") == "asset"}
+
+def search_assets(G: nx.Graph, tags=None, category=None, subcategory=None):
+    assets_all = {n for n, attr in G.nodes(data=True) if attr.get("node_type") == "asset"}
+    result = assets_all
+    if tags:
+        for tag in tags:
+            result = result.intersection(search_assets_by_tag(G, tag))
+    if category:
+        cat_node = f"cat:{category.lower()}"
+        if cat_node in G:
+            result = result.intersection({n for n in G.neighbors(cat_node) if G.nodes[n].get("node_type") == "asset"})
+        else:
+            result = set()
+    if subcategory:
+        subcat_node = f"subcat:{subcategory.lower()}"
+        if subcat_node in G:
+            result = result.intersection({n for n in G.neighbors(subcat_node) if G.nodes[n].get("node_type") == "asset"})
+        else:
+            result = set()
+    return result
+def print_assets(G: nx.Graph, asset_ids):
+    """
+    Utility function to print details (e.g. name, usd_path) of asset nodes.
+    """
+    for aid in asset_ids:
+        attr = G.nodes[aid]
+        name = attr.get("name", "Unnamed")
+        thumbnail = attr.get("thumbnail", "No USD path")
+        dimensions = attr.get("dimensions", ())
+        tags = attr.get("tags", [])
+        print(f"Asset ID: {aid}\n  Name: {name}\n  thumbnail: {thumbnail}\n  dimensions: {dimensions}\n  tags:{tags}\n")
+def get_assets_from_graph(G: nx.Graph, asset_ids):
+    return [G.nodes[aid] for aid in asset_ids if aid in G.nodes()]
+
+    
+def search_graph(keyword):
+
+    geo_pkl = "/media/frank-martinelli/SSD-001/A1.MK.PxVision/pixel_vision/data/mxp/material_master_graph.pkl"
+
+    with open(geo_pkl, "rb") as f:
+        G = pickle.load(f)
+    asset_ids = search_assets_by_tag(G, keyword)
+    image_array = { G.nodes[aid].get("thumbnail", ""):[ aid, G.nodes[aid].get("usd_path", ""), G.nodes[aid].get("path", ""), G.nodes[aid].get("name", "")] for aid in asset_ids }
+ 
+ 
+    return image_array
+
+    
+    
+    
+    
+def create_material_node(asset_id):
+    import hou
+
+    matnet = hou.node("/mat") or hou.node("/shop")
+    if not matnet:
+        print("No material context found.")
+        return
+
+    if matnet.node(asset_id):
+        print(f"Node {asset_id} already exists.")
+        return
+
+    node = matnet.createNode("null", f"material_{asset_id}")
+    node.moveToGoodPosition()
+    print(f"Created material node: {node.path()}")
+    
+    
+    
+    
+IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp", ".gif")
+
+
+class DraggableThumbnail(QtWidgets.QLabel):
+    def __init__(self, img_path, asset_id):
+        super().__init__()
+        self.img_path = img_path
+        self.asset_id = asset_id
+        self.setCursor(QtCore.Qt.OpenHandCursor)
+        self.setAcceptDrops(True)
+        self.drag_start_pos = None  # ð Safe default
+
+    def mousePressEvent(self, event):
+        if event.button() == QtCore.Qt.LeftButton:
+            self.drag_start_pos = event.pos()
+
+    def mouseMoveEvent(self, event):
+        if self.drag_start_pos is None:
+            return
+        if not (event.buttons() & QtCore.Qt.LeftButton):
+            return
+        if (event.pos() - self.drag_start_pos).manhattanLength() < QtWidgets.QApplication.startDragDistance():
+            create_material_node(self.asset_id)
+            return
+
+        # Start drag with asset ID
+        drag = QtGui.QDrag(self)
+        mime = QtCore.QMimeData()
+        mime.setText(self.asset_id)
+        drag.setMimeData(mime)
+        drag.setPixmap(self.pixmap().scaled(64, 64, QtCore.Qt.KeepAspectRatio))
+        drag.exec_(QtCore.Qt.CopyAction)
+
+
+class ImageBrowser(QtWidgets.QWidget):
+    def __init__(self, image_dir=None, metadata_path=None):
+        super(ImageBrowser, self).__init__()
+        self.image_dir = image_dir or os.path.expanduser("~")
+        self.asset_metadata = {}
+ 
+        self.setupUI()
+
+
+    def setupUI(self):
+        layout = QtWidgets.QVBoxLayout(self)
+
+        # Search bar
+        search_layout = QtWidgets.QHBoxLayout()
+        self.search_input = QtWidgets.QLineEdit()
+        self.search_input.setPlaceholderText("Search...")
+        self.search_button = QtWidgets.QPushButton("Search")
+        self.search_button.clicked.connect(self.handle_search)
+        search_layout.addWidget(self.search_input)
+        search_layout.addWidget(self.search_button)
+        layout.addLayout(search_layout)
+        self.setMouseTracking(True)
+        # Scroll area (top)
+        self.scroll_area = QtWidgets.QScrollArea()
+        self.scroll_widget = QtWidgets.QWidget()
+        self.grid_layout = QtWidgets.QGridLayout(self.scroll_widget)
+        self.scroll_widget.setLayout(self.grid_layout)
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setWidget(self.scroll_widget)
+        layout.addWidget(self.scroll_area, stretch=1)
+
+        # Bottom layout with large preview and metadata
+        bottom_layout = QtWidgets.QHBoxLayout()
+        layout.addLayout(bottom_layout)
+
+        self.preview_label = QtWidgets.QLabel("Select an asset")
+        self.preview_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.preview_label.setFixedSize(256, 256)
+        bottom_layout.addWidget(self.preview_label)
+
+        self.info_display = QtWidgets.QTextEdit()
+        self.info_display.setReadOnly(True)
+        bottom_layout.addWidget(self.info_display)
+
+    def handle_search(self):
+        keyword = self.search_input.text().lower()
+        search_data = search_graph(keyword)
+        self.asset_metadata = search_data
+        self.load_images(search_data)
+
+    def create_thumbnail_click_handler(self, img_path, asset_id):
+        def handler(event):
+            pixmap = QtGui.QPixmap(img_path).scaled(256, 256, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+            self.preview_label.setPixmap(pixmap)
+
+            text = f"<b> {asset_id[3]}</b><br>"
+            text = text + f"<b>Asset ID:</b> {asset_id[0]}<br>"
+            text = text + f"<b>Usd Path:</b> {asset_id[1]}<br>"
+            text = text + f"<b>Path:</b> {asset_id[2]}<br>"
+
+            self.info_display.setHtml(text)
+
+        return handler
+
+    def load_images(self, search_data):
+        for i in reversed(range(self.grid_layout.count())):
+            widget = self.grid_layout.itemAt(i).widget()
+            if widget:
+                widget.setParent(None)
+
+        row, col = 0, 0
+        for img_path,asset_id in search_data.items():
+            
+            if not os.path.isfile(img_path):
+                continue
+
+            pixmap = QtGui.QPixmap(img_path)
+            if pixmap.isNull():
+                continue
+
+
+
+            thumb = DraggableThumbnail(img_path, asset_id)
+            thumb.setPixmap(pixmap.scaled(200, 200, QtCore.Qt.KeepAspectRatio))
+            thumb.mousePressEvent = self.create_thumbnail_click_handler(img_path, asset_id)
+            
+            self.grid_layout.addWidget(thumb, row, col)
+            col += 1
+            if col >= 5:
+                col = 0
+                row += 1
+
+
+
+def onCreateInterface():
+    return ImageBrowser()
+
+
+   
+]]></script>
+    <includeInToolbarMenu menu_position="422" create_separator="false"/>
+    <help><![CDATA[]]></help>
+  </interface>
+</pythonPanelDocument>
